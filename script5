@@ -1,0 +1,820 @@
+
+# short term to do:
+
+
+# in excel
+ # estimate seasonality / end of year
+ # catch partial consumption in last month
+ # 
+ # after 11:00
+ # check verification for oversubscribed
+
+# account for partial end month consumption
+# spot check QC
+
+
+# eventual to do list:
+#   when we get PAC and IPC accounts, see what breaks (need to add utility name, and separate by utility)
+#  need to fix chars, looking for 3-char utility but PAC is PacifiCorp
+
+
+# install.packages("stringr")
+# install.packages("dplyr")
+# install.packages("tidyr")
+# install.packages("lubridate")
+# install.packages("xlsx")
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(openxlsx)
+library(readxl)
+#library(xlsx)
+
+
+# wiping environment clean before running full script to avoid data from prior run carrying over
+rm(list=ls())
+
+
+###################
+# USER INPUT - CURRENT BILLING YEAR
+###################
+# enter the program billing that calendarized results should be in (e.g. the 2021 billing year is from April 2021 to March 2022)
+BillingYearInput <- 2022
+
+###################
+# IMPORT DATA
+###################
+
+# setting paths
+path_in<-"../Excess Generation Checks/Raw Data/"
+path_out<-"../Excess Generation Checks/Formatted Data/"
+path_misc<-"../Excess Generation Checks/Misc/"
+path_helper<-"../Helper Data/"
+
+
+# import headenames
+headers_bill<-read.csv(paste0(path_misc,"BillingHeaders.csv"),header=F,fileEncoding="UTF-8-BOM")
+headers_cons<-read.csv(paste0(path_misc,"ConsumptionHeaders.csv"),header=F,fileEncoding="UTF-8-BOM")
+headers_gen<-read.csv(paste0(path_misc,"GenerationHeaders.csv"),header=F,fileEncoding="UTF-8-BOM")
+
+# make list of billing and consumption files
+filelist_inputs<-list.files(path_in)
+filelist_bill<-filelist_inputs[str_detect(filelist_inputs,"ParticipantBilling")]
+filelist_cons<-filelist_inputs[str_detect(filelist_inputs,"ParticipantConsumption")]
+filelist_gen<-filelist_inputs[str_detect(filelist_inputs,"ProjectGeneration")]
+
+
+# reading all billing and consumption files
+inputs_bill_raw<-lapply(paste0(path_in,filelist_bill),read.csv, header=F,col.names = headers_bill$V1,colClasses="character")
+inputs_cons_raw<-lapply(paste0(path_in,filelist_cons),read.csv, header=F,col.names = headers_cons$V1,colClasses="character")
+inputs_gen_raw<-lapply(paste0(path_in,filelist_gen),read.csv, header=F,col.names = headers_gen$V1,colClasses=c(rep("character",4),rep("numeric",26)))
+
+
+
+
+
+# this version of allptpnts was tied to the changes Ryan was trying to make in fall 21 to run the entire participant list through UCI before runnign this step
+# never completed, reverted to using the raw participant download file as the basis for this (below)
+# # reading in master list of participants, and keeping cols of interest
+# filelist_allptpnts<-list.files(paste0(path_helper,"All-Participant Files/"))
+# filelist_allptpnts <- filelist_allptpnts[filelist_allptpnts!="Archive"]
+# 
+# 
+# participant_data<-as.data.frame(read_excel(
+#   paste0(path_helper,"All-Participant Files/",filelist_allptpnts),
+#   sheet = "AllParticipants",
+#   col_types = "text"
+# )) %>% 
+#   select(
+#     ParticipantID,
+#     CustomerName,
+#     ElectricUtility,
+#     AccountNumber,
+#     MeterNumber,
+#     AgreementNumber = SiteID,
+#     CustomerType = CustomerTypeSubmittedByPM,
+#     ContractStatus,
+#     # DateActive,
+#     # ParticipantStatusDate,
+#     # ContractStatusDate,
+#     SubscriptionCapacity = ProposedkW,
+#     ProjectID = CSPProjectID,
+#     ProjectName,
+#     ProjectManager,
+#     SubscriptionManager,
+#     ParticipantStatus,
+#     ContractStatus
+#   ) %>% 
+#   filter(ProjectID!="null")
+
+# reading in master list of participants, and keeping cols of interest
+participant_data<-read.csv(
+  paste0(path_helper,"participantexport.csv"),
+  colClasses="character"
+) %>%
+  mutate(CustomerName = paste(First.Name,Last.Name,sep=" ")) %>% 
+  select(
+    ParticipantID = Participant.ID,
+    CustomerName,
+    AccountName = Primary.Account.Holder,
+    ElectricUtility = Electric.Utility,
+    AccountNumber = Utility.Account.Number,
+    MeterNumber = Utility.Meter.Number,
+    AgreementNumber = Utility.Agreement.Number,
+    CustomerType = Customer.Type,
+    ParticipantStatus = Participant.Status,
+    ContractStatus = Contract.Status,
+    DateActive = Date.Active,
+    ParticipantStatusDate = Participant.Status.Date,
+    ContractStatusDate = Contract.Status.Date,
+    SubscriptionCapacity = Subscription.Capacity,
+    ProjectID = Project.ID,
+    ProjectName = Project.Name,
+    ProjectManager = Project.Manager.Business.Name
+  ) %>% 
+  filter(ProjectID!="null")
+
+###################
+# CLEAN DATA
+###################
+# creating clean DF
+  # add head/tail col
+  # bind to single df
+  # delete head/tail row
+  # delete record type col
+
+inputs_bill_final<-lapply(
+  inputs_bill_raw,
+  mutate,
+  GenerationPeriod = sprintf("%06d",as.numeric(GenerationPeriod)),
+  Head = head(RecordType,1),
+  Tail= tail(RecordType,1)
+) %>% 
+  bind_rows() %>% 
+  filter(RecordType=="D") %>% 
+  select(-RecordType)
+
+inputs_cons_final<-lapply(
+  inputs_cons_raw,
+  mutate,
+  ConsumptionStart = sprintf("%08d",as.numeric(ConsumptionStart)),
+  ConsumptionEnd = sprintf("%08d",as.numeric(ConsumptionEnd)),
+  Head = head(RecordType,1),
+  Tail= tail(RecordType,1)
+) %>%
+  bind_rows() %>% 
+  filter(RecordType=="D") %>% 
+  select(-RecordType)
+
+inputs_gen_final<-lapply(
+  inputs_gen_raw,
+  mutate,
+  Head = head(RecordType,1),
+  Tail= tail(RecordType,1)
+) %>%
+  bind_rows() %>% 
+  filter(RecordType=="D") %>% 
+  select(-RecordType)
+
+###################
+# CREATE CALENDAR-MONTH TABLES
+###################
+
+# monthly Subscription is easy, just need to do light cleaning
+monthly_subscription <- inputs_bill_final %>%
+  mutate(
+    Month=paste(str_sub(GenerationPeriod,3,6),str_sub(GenerationPeriod,1,2),sep="-"),
+    Actual.Generation.kWh=round(as.numeric(GenerationkWh),0),
+    MonthStart = as.Date(paste(str_sub(Month,6,7),"01",str_sub(Month,1,4),sep="-"),"%m-%d-%Y"),
+    MonthEnd = as.Date(paste(month(MonthStart)+ifelse(month(MonthStart)==12,-11,1),day(MonthStart),year(MonthStart)+ifelse(month(MonthStart)==12,1,0),sep="-"),"%m-%d-%Y")-1,
+    Actual.Generation.Data.Days = as.numeric(MonthEnd-MonthStart+1),
+    BillCreditValue=round(as.numeric(BillCreditValue),2),
+    SubscriptionValue=round(as.numeric(SubscriptionValue),2),
+    TotalAdminValue=round(as.numeric(TotalAdminValue),2)
+  ) %>%
+  select(ParticipantID,Month,Actual.Generation.Data.Days,Actual.Generation.kWh,BillCreditValue,SubscriptionValue,TotalAdminValue) %>% 
+  # removing dupes and negative values (had confirmed that all negatives as of Jan 2022 could be safely removed, these correct participants 1270, 1606, 246, and 247)
+  filter(BillCreditValue>=0) %>% 
+  distinct()
+
+
+# consumption tables is harder
+# first create general prep table
+monthly_consumption_1 <- inputs_cons_final %>%
+  select(ParticipantID,ConsumptionStart,ConsumptionEnd,Actual.Consumption.kWh = ConsumptionkWh) %>%
+  mutate(
+    Actual.Consumption.kWh=as.numeric(Actual.Consumption.kWh),
+    ConsumptionStart=as.Date(ConsumptionStart,"%m%d%Y"),
+    ConsumptionEnd=as.Date(ConsumptionEnd,"%m%d%Y"),
+    DaysInPeriod = as.numeric(ConsumptionEnd-ConsumptionStart)+1,
+    kWhPerDay = replace_na(Actual.Consumption.kWh / DaysInPeriod,0)
+  ) %>% 
+  # remove the 1-day 0-kwh entries that Energy Solutions inserts
+  filter(Actual.Consumption.kWh>0|DaysInPeriod>1) %>% 
+  # remove full-cal month kWh entries that ES inserts
+  filter(Actual.Consumption.kWh>0|day(ConsumptionStart)!=1|day(ConsumptionEnd+1)!=1) %>% 
+  # remove duplicates 
+  distinct()
+
+# create list of all calendar months that have any consumption data
+consumptionmonth_min <- min(monthly_consumption_1$ConsumptionStart)
+consumptionmonth_max <- max(monthly_consumption_1$ConsumptionEnd)
+consumptionmonth_count <- month(consumptionmonth_max)-month(consumptionmonth_min) + (year(consumptionmonth_max)-year(consumptionmonth_min))*12+1
+# lubridate is causing errors for some reason so doing brute force alternative to ceiling
+consumptionmonth_startmonth <- as.Date(paste(month(consumptionmonth_min),"01",year(consumptionmonth_min),sep="-"),"%m-%d-%Y")
+consumptionmonth_series <- seq(consumptionmonth_startmonth,length=consumptionmonth_count,by="months")
+consumptionmonth_months <- as.data.frame(consumptionmonth_series)
+
+# create second file with calendarized monthly data
+monthly_consumption_2 <- monthly_consumption_1 %>% 
+  left_join(consumptionmonth_months, by=character()) %>% 
+  rename(MonthStart=consumptionmonth_series) %>% 
+  rowwise() %>% 
+  # calc days and kwh in each calendar month for each reading
+  mutate(
+    MonthEnd = as.Date(paste(month(MonthStart)+ifelse(month(MonthStart)==12,-11,1),day(MonthStart),year(MonthStart)+ifelse(month(MonthStart)==12,1,0),sep="-"),"%m-%d-%Y")-1,
+    BillingDaysInMonth = ifelse(MonthStart>ConsumptionEnd | MonthEnd<ConsumptionStart,0, min(MonthEnd,ConsumptionEnd) - max(MonthStart,ConsumptionStart)+1),
+    Actual.Consumption.kWhInMonth = round(Actual.Consumption.kWh / DaysInPeriod * BillingDaysInMonth,0),
+    Month=paste(str_sub(MonthStart,1,4),str_sub(MonthStart,6,7),sep="-"),
+  ) %>% 
+  # collapsing all readings at participant/month level, summing days and kWh for multiple meter reads touching the same month
+  group_by(ParticipantID,Month) %>% 
+  summarize(
+    Actual.Consumption.Data.Days = sum(BillingDaysInMonth),
+    Actual.Consumption.kWh = sum(Actual.Consumption.kWhInMonth)
+  ) %>% 
+  # remove entries with no billing data (e.g. outside of range)
+  filter(Actual.Consumption.Data.Days>0)
+
+# creating combined monthly table
+monthly_combined_long <- monthly_subscription %>% 
+  full_join(monthly_consumption_2) %>%
+  mutate(
+    BillingYear = as.numeric(str_sub(Month,1,4))-ifelse(as.numeric(str_sub(Month,6,7))<4,1,0)
+  ) %>% 
+  # filter to months where we have Subscription data (consumption data in other months is irrelevant)
+  filter(is.na(Actual.Generation.Data.Days)==F)
+
+# identifying participants with two records for a single month
+# for now just going to skip these
+# eventually would like to build in logic to address it
+ptpnts_with_dupes<- monthly_combined_long %>% 
+  group_by(ParticipantID,Month) %>% 
+  summarize(count=n()) %>% 
+  group_by(ParticipantID) %>% 
+  summarize(maxcount=max(count)) %>% 
+  filter(maxcount>1) %>% 
+  select(ParticipantID)
+
+# spreading wide
+# removing any from ptnts_with_dupes and appending just the PID later
+monthly_combined_wide <- monthly_combined_long %>%
+  select(-BillCreditValue,-SubscriptionValue,-TotalAdminValue) %>% 
+  anti_join(ptpnts_with_dupes) %>% 
+  arrange(Month) %>% 
+  filter(BillingYear == BillingYearInput) %>% 
+  pivot_wider(
+    names_from = Month,
+    values_from = c(Actual.Generation.Data.Days, Actual.Consumption.Data.Days,Actual.Generation.kWh,Actual.Consumption.kWh),
+    names_sep = ".-.",
+  ) %>% 
+  select(-BillingYear) %>% 
+  bind_rows(ptpnts_with_dupes)
+
+# getting billing year YTD totals of consumption and Subscription
+# removing any from ptnts_with_dupes and appending just the PID later
+billingyear_totals <- monthly_combined_long %>% 
+  anti_join(ptpnts_with_dupes) %>% 
+  filter(BillingYear == BillingYearInput) %>% 
+  group_by(ParticipantID) %>% 
+  summarise(
+    YTD_Actual.Generation.Data.Days = sum(Actual.Generation.Data.Days,na.rm=T),
+    YTD_Actual.Generation.kWh = sum(Actual.Generation.kWh,na.rm=T),
+    YTD_Actual.Consumption.Data.Days = sum(Actual.Consumption.Data.Days,na.rm=T),
+    YTD_Actual.Consumption.kWh = sum(Actual.Consumption.kWh,na.rm=T),
+    YTD_BillCreditValue = sum(BillCreditValue,na.rm=T),
+    YTD_SubscriptionValue = sum(SubscriptionValue,na.rm=T),
+    YTD_TotalAdminValue = sum(TotalAdminValue,na.rm=T)
+  ) %>% 
+  mutate(
+    ParticipantErrors = "0"
+  )%>% 
+  bind_rows(ptpnts_with_dupes) %>% 
+  mutate(ParticipantErrors = ifelse(is.na(ParticipantErrors),1,0))
+
+# initial version has a lot of cancelled participants - need to pull in limited customer info from billing file for customers we no longer have data for
+participant_data_missing <- inputs_bill_final %>% 
+  select(ParticipantID,AccountNumber,AgreementNumber,ProjectID,ProjectName) %>% 
+  distinct() %>%
+  full_join(anti_join(distinct(select(inputs_cons_final,ParticipantID,AccountNumber,AgreementNumber)),inputs_bill_final,by="ParticipantID")) %>% 
+  anti_join(participant_data,by="ParticipantID")
+
+
+
+###################
+# FORECASTS
+###################
+
+###
+# GENERATION FORECAST
+###
+
+# prep
+#   import project data, pull expected annual kwh and project kw for projects in table
+#     first grab list of projects that are being actively billed
+projects_in_data <- inputs_bill_final %>% 
+  select(ProjectID,GenerationPeriod) %>% 
+  mutate(MonthStart = as.Date(paste(str_sub(GenerationPeriod,1,2),"01",str_sub(GenerationPeriod,3,6),sep="-"),"%m-%d-%Y")) %>% 
+  group_by(ProjectID) %>% 
+  summarize(
+    FirstGenMonth = min(MonthStart)
+  ) %>% 
+  ungroup()
+
+
+project_data<-read.csv(paste0(path_helper,"Full_Project_Export.csv")) %>% 
+  inner_join(projects_in_data,by=c("Project.ID"="ProjectID")) %>% 
+  left_join(read.csv(paste0(path_helper,"Third Party Subscription Managers.csv"))) %>% 
+  select(
+    ProjectID = Project.ID,
+    ProjectkWAC = Total.Capacity.kW.AC,
+    ProjectAnnualkWh = Total.Annual.Generation.kWh,
+    SubscriptionManager
+  ) 
+
+
+
+
+#   import generation for all projects, remove outliers like snow storm, create monthly table, filter to those with 12 months of history 
+project_generation_monthyear <- inputs_gen_final %>% 
+  rowwise() %>% 
+  mutate(
+    MonthYear=paste(str_sub(Date,1,2),str_sub(Date,5,8),sep="-"),
+    kWhDay = sum(c_across(starts_with("kWhHr")), na.rm = T)
+  ) %>%
+  group_by(ProjectID,MonthYear) %>% 
+  summarize(
+    DaysWithData = n(),
+    kWhMonthYear = sum(as.numeric(kWhDay))
+  ) %>% 
+  ungroup()
+
+
+
+project_generation_calmonth <- project_generation_monthyear %>% 
+  mutate(
+    CalMonth = str_sub(MonthYear,1,2),
+    Year = str_sub(MonthYear,4,7),
+    MonthStart = as.Date(paste(CalMonth,"01",Year,sep="-"),"%m-%d-%Y"),
+    CharMonth = paste0("kWhMonth",CalMonth)
+  ) %>% 
+  # removing data before project started generating and in first month (could be partial)
+  left_join(projects_in_data) %>%
+  # filter(MonthStart > FirstGenMonth) %>%
+  mutate(PostOperationskWh = ifelse(MonthStart > FirstGenMonth, kWhMonthYear,NA)) %>%
+  # averaging by month and spreading
+  group_by(ProjectID,CharMonth) %>% 
+  summarize(kWh = mean(PostOperationskWh,na.rm=T)) %>% 
+  ungroup() %>% 
+  spread(CharMonth,kWh) %>%
+  rowwise() %>% 
+  mutate(
+    AnnualkWh = sum(c_across(kWhMonth01:kWhMonth12), na.rm = T),
+    CompleteYear = is.na(sum(c_across(kWhMonth01:kWhMonth12)))==F
+    )
+  
+#   create parallel table showing % of annual generation, as well as one averaging these values across projects
+project_generation_percent <- project_generation_calmonth %>% 
+  rowwise() %>% 
+  gather("CalMonth","kWh",2:13) %>% 
+  mutate(
+    ProjectPct = kWh/AnnualkWh,
+    CalMonth = substr(CalMonth,9,10)
+  ) %>% 
+  select(ProjectID,CalMonth,ProjectPct)
+  
+project_generation_percent_all <- project_generation_calmonth %>% 
+  filter(CompleteYear==TRUE) %>% 
+  select(ProjectID) %>% 
+  left_join(project_generation_percent) %>% 
+  group_by(CalMonth) %>% 
+  summarize(
+    AllProjectPct = mean(ProjectPct)
+  )
+
+
+# annual generation
+#   sum of actual monthly averages if we have 12 months
+#   from project import if we dont
+project_annual_generation <- rename(project_generation_calmonth,kWhFromBillingHistory = AnnualkWh) %>% 
+  left_join(rename(project_data, kWhFromApplication = ProjectAnnualkWh)) %>% 
+  select(ProjectID,CompleteYear,kWhFromApplication,kWhFromBillingHistory) %>% 
+  mutate(
+    AnnualkWh = ifelse(CompleteYear==TRUE,kWhFromBillingHistory,kWhFromApplication)
+  )
+
+
+# monthtly shares
+#   from same project if we have 12 months
+#   from all-project-avg if we dont
+project_monthly_expected_generation <- project_annual_generation %>% 
+  left_join(project_generation_percent) %>% 
+  left_join(project_generation_percent_all) %>% 
+  mutate(
+    PctToUse = ifelse(CompleteYear==T,ProjectPct,AllProjectPct),
+    ProjectkWhMonthlyExpected = round(AnnualkWh * PctToUse,0)
+  ) %>% 
+  select(ProjectID,CalMonth,ProjectkWhMonthlyExpected)
+
+
+# percent of project currently subscribed by each ptpnt
+#   list of ptpnts from billing file
+#   project kw from platform download
+#   participant kW from partipant download
+
+
+participant_project_share <- participant_data %>% 
+  filter(ParticipantStatus == "Active") %>%
+  mutate(ParticipantkWAC = as.numeric(SubscriptionCapacity)) %>% 
+  select(ParticipantID,ProjectID,ParticipantkWAC,ParticipantStatus) %>% 
+  inner_join(select(project_data,ProjectID,ProjectkWAC)) %>% 
+  mutate(ParticipantProjectShare = ParticipantkWAC / ProjectkWAC)
+
+ 
+# expected participant generation by month
+#   multiple expected project kwh by participant share of project
+participant_monthly_expected_generation <- participant_project_share %>% 
+  left_join(project_monthly_expected_generation) %>% 
+  mutate(GenerationkWhMonthlyExpected = ProjectkWhMonthlyExpected * ParticipantProjectShare) %>% 
+  select(ParticipantID,ProjectID,CalMonth,GenerationkWhMonthlyExpected)
+  
+
+
+
+###
+# CONSUMPTION FORECAST
+###
+
+# first method: past same-month program billing data
+#   if ptpnt has consumption data from same month in prior year, use avg
+#   simple average of past consumption in same month (may eventually want to use weighted avg)
+
+participant_consumption_monthly_pastbills <- monthly_consumption_2 %>% 
+  mutate(
+    MonthStart = as.Date(paste(str_sub(Month,6,7),"01",str_sub(Month,1,4),sep="-"),"%m-%d-%Y"),
+    MonthEnd = as.Date(paste(month(MonthStart)+ifelse(month(MonthStart)==12,-11,1),day(MonthStart),year(MonthStart)+ifelse(month(MonthStart)==12,1,0),sep="-"),"%m-%d-%Y")-1,
+    DaysInMonth = MonthEnd - MonthStart + 1,
+    CompleteMonth = Actual.Consumption.Data.Days == DaysInMonth,
+    CalMonth = str_sub(Month,6,7)
+  ) %>% 
+  filter(CompleteMonth==T) %>% 
+  select(ParticipantID,CalMonth,Actual.Consumption.kWh) %>% 
+  group_by(ParticipantID,CalMonth) %>% 
+  summarize(Consumption.kWhAvg_PastBills = mean(Actual.Consumption.kWh))
+
+# second method: UCI data
+#   for customers with <1 year of billing history 
+#   take wtd avg seasonal data, on kwh/day basis
+#   associate month by season, multiple appropriate kWh/day by number of days in month
+
+# import most recent all-ptpnt file
+filelist_allptpnts<-list.files(paste0(path_helper,"All-Participant Files/"))
+filelist_allptpnts <- filelist_allptpnts[filelist_allptpnts!="Archive"]
+
+input_coltypes <- read.csv(file=paste0(path_helper,"ColTypes.csv"),stringsAsFactors = F) %>% 
+  mutate(
+    format = ifelse(x=="character","text",ifelse(x=="Date"|str_sub(X,-4,-1)=="Date","date",ifelse(x=="integer","numeric",x)))
+  ) %>% 
+  select(format)
+
+input_allptpnts_raw <- as.data.frame(read_excel(
+  paste0(path_helper,"All-Participant Files/",filelist_allptpnts[1]),
+  sheet = "AllParticipants",
+  col_types = c(input_coltypes$format) 
+))
+
+participant_consumption_Seasonal <- participant_data %>% 
+  select(ParticipantID) %>% 
+  unique() %>% 
+  left_join(input_allptpnts_raw) %>% 
+  select(
+    ParticipantID,
+    ProjectID = CSPProjectID,
+    starts_with("kWh_Winter"),
+    starts_with("kWh_Shoulder"),
+    starts_with("kWh_Summer"),
+    starts_with("DaysInSeason_Winter"),
+    starts_with("DaysInSeason_Shoulder"),
+    starts_with("DaysInSeason_Summer"),
+    starts_with("DaysWithData_Winter"),
+    starts_with("DaysWithData_Shoulder"),
+    starts_with("DaysWithData_Summer")
+  ) %>% 
+  filter(is.na(ProjectID)==F) %>% 
+  gather(Label,Value,3:47) %>% 
+  mutate(
+    ValueType = substr(Label,1,str_locate(Label,"_")-1),
+    LabelRemainder = substr(Label,str_locate(Label,"_")+1,100),
+    Season = substr(LabelRemainder,1,str_locate(LabelRemainder,"_")-1),
+    Year = substr(LabelRemainder,str_locate(LabelRemainder,"_")+1,100)
+  ) %>% 
+  select(ParticipantID, ProjectID, ValueType,Season,Year,Value) %>% 
+  spread(ValueType,Value) %>% 
+  filter(DaysWithData==DaysInSeason,DaysWithData>0) %>% 
+  mutate(DailykWh = kWh/DaysWithData) %>% 
+  group_by(ParticipantID,ProjectID,Season) %>% 
+  summarize(AvgDailykWh = mean(DailykWh)) %>% 
+  ungroup()
+
+CalMonth <-sprintf("%02d", c(1:12))
+Season <- c(rep("Winter",3),rep("Shoulder",2),rep("Summer",3),rep("Shoulder",2),rep("Winter",2))
+DaysInMonth <- c(31,28,31,30,31,30,31,31,30,31,30,31)
+Seasonality <- data.frame(CalMonth,Season,DaysInMonth)
+
+
+
+
+participant_consumption_monthly_UCI <- participant_consumption_Seasonal %>% 
+  left_join(Seasonality) %>% 
+  mutate(
+    Consumption.kWhAvg_UCI = AvgDailykWh * DaysInMonth
+  ) %>% 
+  select(ParticipantID,CalMonth,Consumption.kWhAvg_UCI)
+    
+# third method: simple average of program billing data
+#   simple monthly average of the monthly consumption we have data for, assume it is flat
+
+participant_consumption_monthly_flat <- monthly_consumption_2 %>% 
+  mutate(
+    MonthStart = as.Date(paste(str_sub(Month,6,7),"01",str_sub(Month,1,4),sep="-"),"%m-%d-%Y"),
+    MonthEnd = as.Date(paste(month(MonthStart)+ifelse(month(MonthStart)==12,-11,1),day(MonthStart),year(MonthStart)+ifelse(month(MonthStart)==12,1,0),sep="-"),"%m-%d-%Y")-1,
+    DaysInMonth = MonthEnd - MonthStart + 1,
+    CompleteMonth = Actual.Consumption.Data.Days == DaysInMonth,
+    CalMonth = str_sub(Month,6,7)
+  ) %>% 
+  filter(CompleteMonth==T) %>% 
+  select(ParticipantID,Actual.Consumption.kWh) %>% 
+  group_by(ParticipantID) %>% 
+  summarize(Consumption.kWhAvg_Flat = mean(Actual.Consumption.kWh)) %>% 
+  full_join(select(Seasonality,CalMonth),by=character())
+
+
+# combining metrics and choosing best method for each participant and month
+participant_consumption_monthly_combined <- participant_consumption_monthly_pastbills %>% 
+  full_join(participant_consumption_monthly_UCI) %>% 
+  full_join(participant_consumption_monthly_flat) %>% 
+  mutate(
+    Consumption.kWhMonthlyExpected = round(
+      ifelse(is.na(Consumption.kWhAvg_PastBills)==F,Consumption.kWhAvg_PastBills,
+                                ifelse(is.na(Consumption.kWhAvg_UCI)==F,Consumption.kWhAvg_UCI,Consumption.kWhAvg_Flat))
+      ,0)
+  )
+
+
+###
+# COMBINING GENERATION AND CONSUMPTION FORECASTS
+###
+participant_forecast_monthly <- participant_monthly_expected_generation %>% 
+  full_join(select(participant_consumption_monthly_combined,ParticipantID,CalMonth,Consumption.kWhMonthlyExpected))
+  
+
+# creating forecast for current billing year
+billing_year_forecast <- monthly_combined_long %>%
+  # simple cross join of participants and months
+  filter(nchar(ParticipantID)<7) %>% 
+  select(ParticipantID) %>% 
+  unique() %>% 
+  full_join(select(Seasonality,-Season), by=character()) %>% 
+  # join participant table
+  left_join(filter(mutate(monthly_combined_long,CalMonth = substr(Month,6,7)),BillingYear == BillingYearInput)) %>% 
+  select(ParticipantID,CalMonth,Month,DaysInMonth,Actual.Generation.Data.Days,Actual.Generation.kWh,Actual.Consumption.Data.Days,Actual.Consumption.kWh) %>% 
+  left_join(participant_forecast_monthly) %>% 
+  mutate(
+    BillYearSubscriptionDataType = ifelse(is.na(Actual.Generation.Data.Days)|Actual.Generation.Data.Days<(DaysInMonth/2),"Forecasted",
+                                      ifelse(Actual.Generation.Data.Days<DaysInMonth,"Extrapolated","Actual")),
+    BillYearConsumptionDataType = ifelse(is.na(Actual.Consumption.Data.Days)|Actual.Consumption.Data.Days<(DaysInMonth/2),"Forecasted",
+                                      ifelse(Actual.Consumption.Data.Days<DaysInMonth,"Extrapolated","Actual")),
+    Forecast.Generation.kWh = round(ifelse(BillYearSubscriptionDataType=="Forecasted",GenerationkWhMonthlyExpected,
+                                      Actual.Generation.kWh/Actual.Generation.Data.Days*DaysInMonth),0),
+    Forecast.Consumption.kWh = round(ifelse(BillYearConsumptionDataType=="Forecasted",Consumption.kWhMonthlyExpected,
+                                     Actual.Consumption.kWh/Actual.Consumption.Data.Days*DaysInMonth),0)
+  ) %>% 
+  select(ParticipantID,CalMonth,BillYearSubscriptionDataType,BillYearConsumptionDataType,Forecast.Generation.kWh,Forecast.Consumption.kWh)
+
+billing_year_forecast_total <- billing_year_forecast %>% 
+  group_by(ParticipantID) %>% 
+  summarize(
+    Subscription.kWhAnnualForecast = sum(Forecast.Generation.kWh),
+    Consumption.kWhAnnualForecast = sum(Forecast.Consumption.kWh)
+  )
+
+billing_year_forecast_wide <- billing_year_forecast %>% 
+  select(ParticipantID,CalMonth,Forecast.Generation.kWh,Forecast.Consumption.kWh) %>% 
+  gather(Label,Value,3:4) %>% 
+  mutate(
+    Year = BillingYearInput + ifelse(as.numeric(CalMonth)<4,1,0),
+    Header = paste0(Label,".-.",Year,"-",CalMonth)
+  ) %>%
+  select(ParticipantID,Header,Value) %>% 
+  spread(Header,Value)
+
+
+###
+# RECORDING FORECAST METHODS
+###
+GenerationForecastMethod <- project_annual_generation %>% 
+  mutate(
+    GenerationForecastMethod = ifelse(CompleteYear==T,"PastActualGeneration","ExpectedGeneration")
+  ) %>% 
+  select(ProjectID,GenerationForecastMethod)
+
+
+ConsumptionForecastMethodTypes<-c("Same-Month Consumption in Prior Billing Years","Historic Seasonal Consumption At Site","Flat Average Monthly Consumption")
+ConsumptionForecastMethodTypes=as.data.frame(ConsumptionForecastMethodTypes)   
+
+
+ConsumptionForecastMethod <- participant_consumption_monthly_combined %>% 
+  mutate(
+    ConsumptionForecastMethod = ifelse(is.na(Consumption.kWhAvg_PastBills)==F,"Same-Month Consumption in Prior Billing Years",
+                                       ifelse(is.na(Consumption.kWhAvg_UCI)==F,"Historic Seasonal Consumption At Site","Flat Average Monthly Consumption")),
+    Dummy=1
+  ) %>% 
+  select(ParticipantID,ConsumptionForecastMethod,Dummy) %>% 
+  unique() %>% 
+  full_join(ConsumptionForecastMethodTypes,by=c("ConsumptionForecastMethod"="ConsumptionForecastMethodTypes"))%>%
+  pivot_wider(
+    names_from = ConsumptionForecastMethod,
+    values_from = Dummy,
+    values_fill = 0
+  ) %>%
+  filter(is.na(ParticipantID)==F) %>% 
+  mutate(
+    # a = `Same-Month Consumption in Prior Billing Years` + `Historic Seasonal Consumption At Site` + `Flat Average Monthly Consumption`,
+    ConsumptionForecastMethod = ifelse(
+      `Same-Month Consumption in Prior Billing Years` + `Historic Seasonal Consumption At Site` + `Flat Average Monthly Consumption` > 1, "Mixed Method",
+      ifelse(`Same-Month Consumption in Prior Billing Years`==1,"Same-Month Consumption in Prior Billing Years",
+             ifelse(`Historic Seasonal Consumption At Site`==1,"Historic Seasonal Consumption At Site",
+                    ifelse(`Flat Average Monthly Consumption`==1,"Flat Average Monthly Consumption","Error"))))
+  ) %>% 
+  select(ParticipantID,ConsumptionForecastMethod)
+
+
+
+###################
+# EXPORT FILES
+###################
+
+
+
+# combined final table of participant data with annual and monthly data appended, (actuals and forecast)
+monthly_participant_data <- participant_data %>% 
+  bind_rows(participant_data_missing) %>% 
+  full_join(billingyear_totals,by="ParticipantID") %>%
+  left_join(ConsumptionForecastMethod) %>% 
+  left_join(GenerationForecastMethod) %>% 
+  rowwise() %>% 
+  mutate(
+    YTD_BillSavings = YTD_BillCreditValue - YTD_SubscriptionValue - YTD_TotalAdminValue,
+    YTD_ExcessSubscription.kWh = max(0, YTD_Actual.Generation.kWh - YTD_Actual.Consumption.kWh),
+    CostRecoveryEligible = ifelse(ParticipantStatus=="Active" & YTD_Actual.Generation.Data.Days==max(billingyear_totals$YTD_Actual.Generation.Data.Days,na.rm=T),1,0),
+    YTD_CostRecovery = CostRecoveryEligible * YTD_ExcessSubscription.kWh * ifelse(ElectricUtility == "Portland_General_Electric",0.11234,NA),
+    YTD_NetAfterTrueup = YTD_BillSavings - YTD_CostRecovery,
+    YTD_PctConsumptionOffset = ifelse(YTD_Actual.Consumption.kWh==0,1,round(YTD_Actual.Generation.kWh/YTD_Actual.Consumption.kWh,2)),
+    YTD_BillingDaysWithConsumptionData = round(YTD_Actual.Consumption.Data.Days/YTD_Actual.Generation.Data.Days,2),
+  ) %>% 
+  left_join(billing_year_forecast_total,by="ParticipantID") %>% 
+  mutate(
+    ForecastedExcessSubscription.kWh = max(0, Subscription.kWhAnnualForecast - Consumption.kWhAnnualForecast),
+    ForecastedCostRecovery = ForecastedExcessSubscription.kWh * ifelse(ElectricUtility == "Portland_General_Electric",0.11234,NA),
+    ForecastedPctConsumptionOffset = round(Subscription.kWhAnnualForecast/Consumption.kWhAnnualForecast,2)
+  ) %>% 
+  full_join(monthly_combined_wide,by="ParticipantID") %>% 
+  # filtering down to rows with data
+  filter(is.na(YTD_Actual.Generation.Data.Days)==F | is.na(YTD_Actual.Consumption.Data.Days)==F | is.na(ParticipantErrors)==F) %>% 
+  # removing project admin accounts
+  filter(nchar(ParticipantID)<7) %>% 
+  left_join(billing_year_forecast_wide)
+
+
+# preparing for export
+participant_export <- monthly_participant_data %>% 
+  filter(ParticipantStatus == "Active",ContractStatus=="Verified") %>% 
+  left_join(select(project_data,ProjectID,SubscriptionManager)) %>% 
+  mutate(SubscriptionCapacity = as.numeric(SubscriptionCapacity)) %>% 
+  select(
+    Participant.ID = ParticipantID,
+    Participant.Name = CustomerName,
+    Utility.Account.Name = AccountName,
+    Electric.Utility = ElectricUtility,
+    Account.Number = AccountNumber,
+    Meter.Number = MeterNumber,
+    Site.ID = AgreementNumber,
+    Customer.Type = CustomerType,
+    Project.ID = ProjectID,
+    Project.Name = ProjectName,
+    Project.Manager = ProjectManager,
+    Subscription.Manager = SubscriptionManager,
+    Subscription.kW = SubscriptionCapacity,
+    YTD.Days.with.Generation.Data = YTD_Actual.Generation.Data.Days,
+    YTD.kWh.Generation = YTD_Actual.Generation.kWh,
+    YTD.Days.with.Consumption.Data = YTD_Actual.Consumption.Data.Days,
+    YTD.kWh.Consumption = YTD_Actual.Consumption.kWh,
+    Eligible.for.Cost.Recovery = CostRecoveryEligible,
+    Forecasted.Annual.kWh.Generation = Subscription.kWhAnnualForecast,
+    Forecasted.Annual.kWh.Consumption = Consumption.kWhAnnualForecast,
+    Forecasted.Annual.kWh.Excess.Generation = ForecastedExcessSubscription.kWh,
+    Forecasted.Generation.as.Pct.of.Consumption = ForecastedPctConsumptionOffset,
+    Generation.Forecast.Method = GenerationForecastMethod,
+    Consumption.Forecast.Method = ConsumptionForecastMethod,
+    starts_with("Actual.Generation.Data.Days"),
+    starts_with("Actual.Consumption.Data.Days"),
+    starts_with("Actual.Generation.kWh"),
+    starts_with("Actual.Consumption.kWh"),
+    starts_with("Forecast.Generation.kWh"),
+    starts_with("Forecast.Consumption.kWh"),
+    Error.Check = ParticipantErrors,
+  )
+
+# add spaces into excel names
+names(participant_export) <- gsub(x = names(participant_export),
+                        pattern = "\\.",
+                        replacement = " ")
+
+# export cleaned raw data files
+write.csv(
+  inputs_bill_final,
+  file=paste0(path_out,"ParticipantBillingFile_",BillingYearInput,"_",format(Sys.Date(),format="%d%m%y"),".csv"),
+  # the EOL line below is needed when running on a Mac, keep commented out when running on a PC
+  # eol = "\r\n",
+  row.names = FALSE
+)
+
+write.csv(
+  inputs_cons_final,
+  file=paste0(path_out,"ParticipantConsumptionFile_",BillingYearInput,"_",format(Sys.Date(),format="%d%m%y"),".csv"),
+  # the EOL line below is needed when running on a Mac, keep commented out when running on a PC
+  # eol = "\r\n",
+  row.names = FALSE
+)
+
+# export monthly billing year file w participant data
+write.xlsx(
+  participant_export,
+  paste0(path_out,"ExcessGenerationCheck_PAFile_",BillingYearInput,"_",format(Sys.Date(),format="%d%m%y"),".xlsx")
+)
+
+
+# creating a results file to be shared with each subscriber organization, in current run folder
+# in the secondary verification process, these will be replaced
+# first creating list of names with subscriber managers (will include NA output if any dont have a name)
+ExportNames_SubscriberOrgs <- participant_export%>% 
+  select('Subscription Manager') %>% 
+  distinct()
+ExportNames_SubscriberOrgs<-ExportNames_SubscriberOrgs[[1]]
+
+# creating subsetted DF for each PM, limited to PA review or pre-review status
+for(i in 1:length(ExportNames_SubscriberOrgs)) {
+  assign(
+    paste0("Export_SM_",ExportNames_SubscriberOrgs[i]),
+    participant_export %>% 
+      mutate('Subscription Manager' = replace_na(get('Subscription Manager'),"NA")) %>%
+      filter(get('Subscription Manager')==ExportNames_SubscriberOrgs[i]) %>% 
+      select(-'Error Check')
+    )
+  write.xlsx(
+    get(paste0("Export_SM_",ExportNames_SubscriberOrgs[i])),
+    file=paste0(path_out,"ExcessGenerationCheck_",ExportNames_SubscriberOrgs[i],"_",BillingYearInput,"_",format(Sys.Date(),format="%d%m%y"),".xlsx"),
+  )
+}
+
+
+
+# # testing template
+# 
+# 
+# testexport<-participant_export %>% 
+#   mutate('Subscription Manager' = replace_na(get('Subscription Manager'),"NA")) %>%
+#   filter(get('Subscription Manager')==ExportNames_SubscriberOrgs[1]) %>% 
+#   select(-'Error Check')
+# 
+# 
+# 
+# write.xlsx(testexport,paste0(path_misc,"formattest.xlsx"),
+#            # row.names=F,
+#            # col.names=T,
+#            formatTemplate = paste0(path_misc,"ExcessGenerationTemplate.xlsx"))
+# 
+# 
+# 
+# 
+# workbook <- paste0(path_misc,"test.xlsx")
+# sheet <- "testsheet"
+# 
+# # Then, create a data frame that you want to write to the Excel workbook
+# data <- data.frame(A = c(1, 2, 3), B = c("a", "b", "c"))
+# 
+# # Finally, use the write.xlsx() function to write the data frame to the specified sheet in the existing workbook
+# write.xlsx(data, workbook, sheet,asTable = F)
+# 
+# 
